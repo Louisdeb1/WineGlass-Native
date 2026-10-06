@@ -81,6 +81,12 @@ jobs:
               path.write_text(helpers + text)
           engine = Path(os.environ['GITHUB_WORKSPACE']) / 'Sources/Core/wg_engine.c'
           engine.write_text('#include <sys/time.h>\n' + engine.read_text())
+          metal = Path(os.environ['GITHUB_WORKSPACE']) / 'Sources/Graphics/WGMetalBackend.m'
+          text = metal.read_text()
+          text = text.replace('#import <AppKit/AppKit.h>', '#include <TargetConditionals.h>\n#if TARGET_OS_OSX\n#import <AppKit/AppKit.h>\n#endif')
+          text = text.replace('            // Dump one frame per movie', '#if TARGET_OS_OSX\n            // Dump one frame per movie')
+          text = text.replace('            }\n            CFRelease(sb);', '            }\n#endif\n            CFRelease(sb);')
+          metal.write_text(text)
           PY
           WG_CC="$(xcrun --sdk iphoneos -f clang)"
           WG_AR="$(xcrun --sdk iphoneos -f ar)"
@@ -158,6 +164,7 @@ jobs:
             'Resolved iOS-unavailable pthread JIT toggle APIs dynamically in blink and JIT probe; kept MAP_JIT and JIT compiler enabled.' \
             'Built flock for macOS with host SDK before iOS cross configure.' \
             'Added missing sys/time.h include for gettimeofday under current Clang C11 checks.' \
+            'Guarded AppKit import and desktop-only PNG debug dump with TARGET_OS_OSX; preserved Metal and movie rendering.' \
             'Original entitlement file preserved byte-for-byte.' > dist/BUILD-NOTES.txt
           cat build-logs/toolchain.txt >> dist/BUILD-NOTES.txt
       - uses: actions/upload-artifact@v4
