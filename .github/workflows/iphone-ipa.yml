@@ -79,6 +79,8 @@ jobs:
               text = text.replace('pthread_jit_write_protect_supported_np(', 'wg_runtime_jit_supported(')
               text = text.replace('pthread_jit_write_protect_np(', 'wg_runtime_jit_toggle(')
               path.write_text(helpers + text)
+          engine = Path(os.environ['GITHUB_WORKSPACE']) / 'Sources/Core/wg_engine.c'
+          engine.write_text('#include <sys/time.h>\n' + engine.read_text())
           PY
           WG_CC="$(xcrun --sdk iphoneos -f clang)"
           WG_AR="$(xcrun --sdk iphoneos -f ar)"
@@ -155,6 +157,7 @@ jobs:
             'Created empty GameData directory expected by XcodeGen.' \
             'Resolved iOS-unavailable pthread JIT toggle APIs dynamically in blink and JIT probe; kept MAP_JIT and JIT compiler enabled.' \
             'Built flock for macOS with host SDK before iOS cross configure.' \
+            'Added missing sys/time.h include for gettimeofday under current Clang C11 checks.' \
             'Original entitlement file preserved byte-for-byte.' > dist/BUILD-NOTES.txt
           cat build-logs/toolchain.txt >> dist/BUILD-NOTES.txt
       - uses: actions/upload-artifact@v4
