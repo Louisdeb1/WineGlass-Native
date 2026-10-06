@@ -60,6 +60,8 @@ jobs:
           WG_AR="$(xcrun --sdk iphoneos -f ar)"
           WG_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
           WG_CFLAGS="-g -O2 -arch arm64 -isysroot $WG_SDK -miphoneos-version-min=17.0"
+          mkdir -p o/tool
+          xcrun --sdk macosx clang -isysroot "$(xcrun --sdk macosx --show-sdk-path)" tool/flock.c -o o/tool/flock
           ./configure CC="$WG_CC" AR="$WG_AR" CFLAGS="$WG_CFLAGS" \
             UOPFLAGS="$WG_CFLAGS" --disable-threads --disable-sockets \
             2>&1 | tee "$WG_ROOT/build-logs/blink-configure.log"
