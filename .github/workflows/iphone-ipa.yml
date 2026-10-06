@@ -56,6 +56,30 @@ jobs:
           git apply "$WG_ROOT/Vendor/blink/patches/wineglass-blink.patch"
           cp "$WG_ROOT/Vendor/blink/patches/config.h.ios" config.h.ios
           cp config.h.ios config.h
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          helpers = '''#include <dlfcn.h>
+          #include <stdlib.h>
+          /* Xcode iOS marks the direct JIT toggle API unavailable. Resolve it
+             at runtime and check both entry points, retaining the JIT engine. */
+          static int wg_runtime_jit_supported(void) {
+              int (*supported)(void) = (int (*)(void))dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_supported_np");
+              void *toggle = dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
+              return supported && toggle ? supported() : 0;
+          }
+          static void wg_runtime_jit_toggle(int enabled) {
+              void (*toggle)(int) = (void (*)(int))dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
+              if (!toggle) abort();
+              toggle(enabled);
+          }
+          '''
+          for path in (Path('blink/jit.c'), Path(os.environ['GITHUB_WORKSPACE']) / 'Sources/Core/wg_jit_probe.c'):
+              text = path.read_text()
+              text = text.replace('pthread_jit_write_protect_supported_np(', 'wg_runtime_jit_supported(')
+              text = text.replace('pthread_jit_write_protect_np(', 'wg_runtime_jit_toggle(')
+              path.write_text(helpers + text)
+          PY
           WG_CC="$(xcrun --sdk iphoneos -f clang)"
           WG_AR="$(xcrun --sdk iphoneos -f ar)"
           WG_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
@@ -129,6 +153,8 @@ jobs:
             'Applied existing WineGlass blink patch to pinned upstream blink.' \
             'Restored supplied config.h.ios after cross configure feature probes.' \
             'Created empty GameData directory expected by XcodeGen.' \
+            'Resolved iOS-unavailable pthread JIT toggle APIs dynamically in blink and JIT probe; kept MAP_JIT and JIT compiler enabled.' \
+            'Built flock for macOS with host SDK before iOS cross configure.' \
             'Original entitlement file preserved byte-for-byte.' > dist/BUILD-NOTES.txt
           cat build-logs/toolchain.txt >> dist/BUILD-NOTES.txt
       - uses: actions/upload-artifact@v4
