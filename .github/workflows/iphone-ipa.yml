@@ -1,0 +1,142 @@
+name: WineGlass iPhone ARM64 IPA
+on:
+  push:
+    paths:
+      - '.github/workflows/iphone-ipa.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select newest installed Xcode
+        run: |
+          python3 - <<'PY'
+          import glob, os, plistlib, re
+          candidates = []
+          for path in glob.glob('/Applications/Xcode*.app'):
+              try:
+                  with open(path + '/Contents/Info.plist', 'rb') as f:
+                      info = plistlib.load(f)
+                  version = info['CFBundleShortVersionString']
+                  nums = tuple(map(int, re.findall(r'\d+', version)))
+                  if os.path.exists(path + '/Contents/Developer/Platforms/iPhoneOS.platform'):
+                      candidates.append((nums, path, version))
+              except (OSError, KeyError):
+                  pass
+          if not candidates:
+              raise SystemExit('No iPhoneOS Xcode installed')
+          _, path, version = max(candidates)
+          print('Selected Xcode', version, path)
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write('DEVELOPER_DIR=' + path + '/Contents/Developer\n')
+          PY
+      - name: Install XcodeGen and GNU Make
+        run: |
+          brew install xcodegen make
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          mkdir -p build-logs dist
+          xcodebuild -version > build-logs/toolchain.txt
+          shasum -a 256 Sources/App/WineGlass.entitlements > build-logs/entitlements.sha256
+      - name: Build patched blink and bridge for iPhone ARM64
+        run: |
+          set -euo pipefail
+          WG_ROOT="$PWD"
+          BLINK_ROOT="$RUNNER_TEMP/wineglass-blink"
+          git clone https://github.com/jart/blink.git "$BLINK_ROOT"
+          cd "$BLINK_ROOT"
+          git checkout f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580
+          git apply "$WG_ROOT/Vendor/blink/patches/wineglass-blink.patch"
+          cp "$WG_ROOT/Vendor/blink/patches/config.h.ios" config.h.ios
+          cp config.h.ios config.h
+          WG_CC="$(xcrun --sdk iphoneos -f clang)"
+          WG_AR="$(xcrun --sdk iphoneos -f ar)"
+          WG_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          WG_CFLAGS="-g -O2 -arch arm64 -isysroot $WG_SDK -miphoneos-version-min=17.0"
+          ./configure CC="$WG_CC" AR="$WG_AR" CFLAGS="$WG_CFLAGS" \
+            UOPFLAGS="$WG_CFLAGS" --disable-threads --disable-sockets \
+            2>&1 | tee "$WG_ROOT/build-logs/blink-configure.log"
+          # Restore the provided iOS config after macOS host feature probes.
+          cp config.h.ios config.h
+          gmake -j"$(sysctl -n hw.ncpu)" o//blink/blink.a \
+            2>&1 | tee "$WG_ROOT/build-logs/blink-build.log"
+          mkdir -p "$WG_ROOT/Vendor/blink/lib"
+          cp o//blink/blink.a "$WG_ROOT/Vendor/blink/lib/blink.a"
+          "$WG_CC" -c -std=c11 -g -O2 -arch arm64 \
+            -isysroot "$WG_SDK" -miphoneos-version-min=17.0 \
+            -D_FILE_OFFSET_BITS=64 -D_DARWIN_C_SOURCE -DTARGET_OS_IPHONE=1 \
+            -isystem "$WG_SDK/usr/include" -I. -include config.h \
+            "$WG_ROOT/Vendor/blink/wg_blink_impl.c" \
+            -o "$WG_ROOT/Vendor/blink/lib/wg_blink_impl.o" \
+            2>&1 | tee "$WG_ROOT/build-logs/blink-bridge.log"
+          xcrun lipo -info "$WG_ROOT/Vendor/blink/lib/blink.a"
+          xcrun lipo -info "$WG_ROOT/Vendor/blink/lib/wg_blink_impl.o"
+      - name: Generate project and compile Release without Apple signing
+        run: |
+          set -euo pipefail
+          mkdir -p GameData
+          xcodegen generate
+          xcodebuild -project WineGlass.xcodeproj -scheme WineGlass \
+            -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' -arch arm64 \
+            -derivedDataPath "$PWD/build" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            ONLY_ACTIVE_ARCH=NO build \
+            2>&1 | tee build-logs/wineglass-build.log
+          shasum -a 256 -c build-logs/entitlements.sha256
+      - name: Package and validate IPA
+        run: |
+          set -euo pipefail
+          WG_APP="$PWD/build/Build/Products/Release-iphoneos/WineGlass.app"
+          test -d "$WG_APP"
+          WG_EXE="$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$WG_APP/Info.plist")"
+          test "$(xcrun lipo -archs "$WG_APP/$WG_EXE")" = arm64
+          file "$WG_APP/$WG_EXE" | tee build-logs/architecture.txt
+          xcrun vtool -show-build "$WG_APP/$WG_EXE" | tee build-logs/platform.txt
+          grep -q 'platform IOS' build-logs/platform.txt
+          cp Sources/App/WineGlass.entitlements "$WG_APP/WineGlass.entitlements"
+          mkdir -p "$RUNNER_TEMP/wineglass-package/Payload"
+          ditto "$WG_APP" "$RUNNER_TEMP/wineglass-package/Payload/WineGlass.app"
+          (cd "$RUNNER_TEMP/wineglass-package" && zip -qry "$GITHUB_WORKSPACE/dist/WineGlass-Native.ipa" Payload)
+          python3 - <<'PY'
+          import plistlib, struct, zipfile
+          path = 'dist/WineGlass-Native.ipa'
+          with zipfile.ZipFile(path) as z:
+              assert z.testzip() is None
+              prefix = 'Payload/WineGlass.app/'
+              info = plistlib.loads(z.read(prefix + 'Info.plist'))
+              exe = z.read(prefix + info['CFBundleExecutable'])
+              magic, cpu, subtype, kind = struct.unpack_from('<IIII', exe)
+              assert magic == 0xfeedfacf and cpu == 0x0100000c and kind == 2
+              source = open('Sources/App/WineGlass.entitlements', 'rb').read()
+              assert z.read(prefix + 'WineGlass.entitlements') == source
+              print('Verified iPhone ARM64 Mach-O executable and Payload/WineGlass.app')
+          PY
+          shasum -a 256 dist/WineGlass-Native.ipa | tee dist/SHA256.txt
+          cp Sources/App/WineGlass.entitlements dist/
+          git diff -- Sources Vendor project.yml > dist/compatibility-changes.patch
+          printf '%s\n' \
+            'Unsigned iPhoneOS ARM64 Release build; requires sideload signing and separate JIT activation.' \
+            'Applied existing WineGlass blink patch to pinned upstream blink.' \
+            'Restored supplied config.h.ios after cross configure feature probes.' \
+            'Created empty GameData directory expected by XcodeGen.' \
+            'Original entitlement file preserved byte-for-byte.' > dist/BUILD-NOTES.txt
+          cat build-logs/toolchain.txt >> dist/BUILD-NOTES.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WineGlass-Native-iPhone-ARM64
+          path: dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: WineGlass-build-logs
+          path: build-logs/
+          if-no-files-found: warn
