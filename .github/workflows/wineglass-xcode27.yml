@@ -105,7 +105,7 @@ jobs:
           xcodegen generate
           xcodebuild -project WineGlass.xcodeproj -scheme WineGlass \
             -configuration Release -sdk iphoneos \
-            -destination 'generic/platform=iOS' -arch arm64 \
+            -destination 'generic/platform=iOS' ARCHS=arm64 \
             -derivedDataPath "$PWD/build" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             ONLY_ACTIVE_ARCH=NO build \
