@@ -68,6 +68,10 @@ jobs:
           assert marker in s
           s = s.replace(marker, '#include <TargetConditionals.h>\n#if TARGET_OS_IPHONE\n#define pthread_jit_write_protect_supported_np() 0\n#define pthread_jit_write_protect_np(x) ((void)(x))\n#endif\n' + marker)
           p.write_text(s)
+          p = Path(__import__('os').environ['GITHUB_WORKSPACE']) / 'Sources/Core/wg_engine.c'
+          s = p.read_text()
+          assert '#include <sys/resource.h>' in s
+          p.write_text(s.replace('#include <sys/resource.h>', '#include <sys/resource.h>\n#include <sys/time.h>'))
           PY
           cp "$WG_ROOT/Vendor/blink/patches/config.h.ios" config.h.ios
           cp config.h.ios config.h
@@ -147,6 +151,7 @@ jobs:
             'Applied existing WineGlass blink patch to pinned upstream blink.' \
             'Restored supplied config.h.ios after cross configure feature probes.' \
             'Created empty GameData directory expected by XcodeGen.' \
+            'Added sys/time.h for gettimeofday declaration in wg_engine.c.' \
             'Compiled flock for macOS before iPhoneOS cross configure.' \
             'Guarded macOS-only pthread JIT write-protection APIs on iOS; JIT and execution probe remain enabled.' \
             'Original entitlement file preserved byte-for-byte.' > dist/BUILD-NOTES.txt
