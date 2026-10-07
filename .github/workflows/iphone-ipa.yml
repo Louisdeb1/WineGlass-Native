@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - '.github/workflows/iphone-ipa.yml'
+      - 'Resources/WineGlassIcon.png'
   workflow_dispatch:
 permissions:
   contents: read
@@ -121,6 +122,56 @@ jobs:
             2>&1 | tee "$WG_ROOT/build-logs/blink-bridge.log"
           xcrun lipo -info "$WG_ROOT/Vendor/blink/lib/blink.a"
           xcrun lipo -info "$WG_ROOT/Vendor/blink/lib/wg_blink_impl.o"
+      - name: Configure original app icon, ProMotion and Game Mode
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, plistlib, subprocess
+          source = Path('Resources/WineGlassIcon.png')
+          assert source.is_file()
+          root = Path('Resources/AppIcons.xcassets')
+          icons = root / 'AppIcon.appiconset'
+          icons.mkdir(parents=True, exist_ok=True)
+          (root / 'Contents.json').write_text(json.dumps({'info': {'author': 'xcode', 'version': 1}}, indent=2))
+          slots = []
+          for idiom, sizes, scales in (
+              ('iphone', (20, 29, 40, 60), (2, 3)),
+              ('ipad', (20, 29, 40, 76), (1, 2)),
+              ('ipad', (83.5,), (2,)),
+              ('ios-marketing', (1024,), (1,))):
+              for size in sizes:
+                  for scale in scales:
+                      pixels = round(size * scale)
+                      filename = f'{idiom}-{size}-{scale}x.png'
+                      subprocess.run(['sips', '-z', str(pixels), str(pixels), str(source), '--out', str(icons / filename)], check=True)
+                      slots.append({'idiom': idiom, 'size': f'{size}x{size}', 'scale': f'{scale}x', 'filename': filename})
+          (icons / 'Contents.json').write_text(json.dumps({'images': slots, 'info': {'author': 'xcode', 'version': 1}}, indent=2))
+          path = Path('Sources/App/Info.plist')
+          info = plistlib.loads(path.read_bytes())
+          info['CADisableMinimumFrameDurationOnPhone'] = True
+          info['LSSupportsGameMode'] = True
+          info['GCSupportsGameMode'] = True
+          info['LSApplicationCategoryType'] = 'public.app-category.games'
+          info['CFBundleShortVersionString'] = '0.2'
+          info['CFBundleVersion'] = '2'
+          path.write_bytes(plistlib.dumps(info, sort_keys=False))
+          scene = Path('Sources/App/WGSceneDelegate.m')
+          text = scene.read_text()
+          old = '_displayLink.preferredFrameRateRange = CAFrameRateRangeMake(30, 120, 60);'
+          assert text.count(old) == 1
+          text = text.replace(old, '''// Request the screen's maximum rate, capped at 120 Hz.
+              // iOS still controls the actual refresh rate and power/thermal limits.
+              float maxFPS = MIN(120, self.window.screen.maximumFramesPerSecond);
+              _displayLink.preferredFrameRateRange = CAFrameRateRangeMake(MIN(60, maxFPS), maxFPS, maxFPS);''')
+          text = text.replace('forMode:NSDefaultRunLoopMode', 'forMode:NSRunLoopCommonModes')
+          scene.write_text(text)
+          project = Path('project.yml')
+          text = project.read_text()
+          text = text.replace('      - path: Resources\n        buildPhase: resources', '      - path: Resources\n        excludes:\n          - WineGlassIcon.png\n        buildPhase: resources')
+          project.write_text(text)
+          print('AppIcon generated; ProMotion prefers up to 120 Hz; Game Mode declared.')
+          PY
       - name: Generate project and compile Release without Apple signing
         run: |
           set -euo pipefail
@@ -155,6 +206,10 @@ jobs:
               assert z.testzip() is None
               prefix = 'Payload/WineGlass.app/'
               info = plistlib.loads(z.read(prefix + 'Info.plist'))
+              assert info['CADisableMinimumFrameDurationOnPhone'] is True
+              assert info['LSSupportsGameMode'] is True and info['GCSupportsGameMode'] is True
+              assert info['CFBundleIcons']['CFBundlePrimaryIcon']['CFBundleIconName'] == 'AppIcon'
+              assert prefix + 'Assets.car' in z.namelist()
               exe = z.read(prefix + info['CFBundleExecutable'])
               magic, cpu, subtype, kind = struct.unpack_from('<IIII', exe)
               assert magic == 0xfeedfacf and cpu == 0x0100000c and kind == 2
@@ -175,6 +230,7 @@ jobs:
             'Added missing sys/time.h include for gettimeofday under current Clang C11 checks.' \
             'Guarded AppKit, desktop PNG diagnostics and the macOS-only D24S8 pixel format with TARGET_OS_OSX; preserved iOS Metal and movie rendering.' \
             'Gated optional WG_SPINLOG/WG_SPINPIN instrumentation absent from the supplied blink patch; core threading and JIT retained. Strict undefined-symbol linking enabled.' \
+            'Added original AppIcon asset catalog; declared Game Mode for current and older iOS; ProMotion rendering prefers screen maximum up to 120 Hz.' \
             'Original entitlement file preserved byte-for-byte.' > dist/BUILD-NOTES.txt
           cat build-logs/toolchain.txt >> dist/BUILD-NOTES.txt
       - uses: actions/upload-artifact@v4
