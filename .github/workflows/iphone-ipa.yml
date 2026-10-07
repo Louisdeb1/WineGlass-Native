@@ -80,7 +80,14 @@ jobs:
               text = text.replace('pthread_jit_write_protect_np(', 'wg_runtime_jit_toggle(')
               path.write_text(helpers + text)
           engine = Path(os.environ['GITHUB_WORKSPACE']) / 'Sources/Core/wg_engine.c'
-          engine.write_text('#include <sys/time.h>\n' + engine.read_text())
+          text = '#include <sys/time.h>\n' + engine.read_text()
+          text = text.replace('extern void (*wg_spinlock_acquire_hook)(unsigned long long addr, unsigned long long rip);', 'extern void (*wg_spinlock_acquire_hook)(unsigned long long addr, unsigned long long rip) __attribute__((weak_import));')
+          text = text.replace('if (wg_spinpin_on() || getenv("WG_SPINLOG")) {', 'if (&wg_spinlock_acquire_hook && (wg_spinpin_on() || getenv("WG_SPINLOG"))) {')
+          text = text.replace('extern unsigned long long wg_lockcas_total, wg_lockcas_acq, wg_cx16_total, wg_cx16_ok, wg_store_total;', 'extern unsigned long long wg_lockcas_total __attribute__((weak_import)), wg_lockcas_acq __attribute__((weak_import)), wg_cx16_total __attribute__((weak_import)), wg_cx16_ok __attribute__((weak_import)), wg_store_total __attribute__((weak_import));\n        if (&wg_lockcas_total && &wg_lockcas_acq && &wg_cx16_total && &wg_store_total) {')
+          text = text.replace('        wg_dump_spinrips();', '        }\n        wg_dump_spinrips();')
+          engine.write_text(text)
+          project = Path(os.environ['GITHUB_WORKSPACE']) / 'project.yml'
+          project.write_text(project.read_text().replace('          - dynamic_lookup', '          - error'))
           metal = Path(os.environ['GITHUB_WORKSPACE']) / 'Sources/Graphics/WGMetalBackend.m'
           text = metal.read_text()
           text = text.replace('#import <AppKit/AppKit.h>', '#include <TargetConditionals.h>\n#if TARGET_OS_OSX\n#import <AppKit/AppKit.h>\n#endif')
@@ -166,6 +173,7 @@ jobs:
             'Built flock for macOS with host SDK before iOS cross configure.' \
             'Added missing sys/time.h include for gettimeofday under current Clang C11 checks.' \
             'Guarded AppKit, desktop PNG diagnostics and the macOS-only D24S8 pixel format with TARGET_OS_OSX; preserved iOS Metal and movie rendering.' \
+            'Optional blink spin diagnostics absent from the supplied patch are weak imports guarded before access; strict undefined-symbol linking enabled.' \
             'Original entitlement file preserved byte-for-byte.' > dist/BUILD-NOTES.txt
           cat build-logs/toolchain.txt >> dist/BUILD-NOTES.txt
       - uses: actions/upload-artifact@v4
