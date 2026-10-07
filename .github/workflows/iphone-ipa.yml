@@ -86,6 +86,7 @@ jobs:
           text = text.replace('#import <AppKit/AppKit.h>', '#include <TargetConditionals.h>\n#if TARGET_OS_OSX\n#import <AppKit/AppKit.h>\n#endif')
           text = text.replace('            // Dump one frame per movie', '#if TARGET_OS_OSX\n            // Dump one frame per movie')
           text = text.replace('            }\n            CFRelease(sb);', '            }\n#endif\n            CFRelease(sb);')
+          text = text.replace('pf == MTLPixelFormatDepth32Float_Stencil8 || pf == MTLPixelFormatDepth24Unorm_Stencil8;', 'pf == MTLPixelFormatDepth32Float_Stencil8\n#if TARGET_OS_OSX\n           || pf == MTLPixelFormatDepth24Unorm_Stencil8\n#endif\n           ;')
           metal.write_text(text)
           PY
           WG_CC="$(xcrun --sdk iphoneos -f clang)"
@@ -164,7 +165,7 @@ jobs:
             'Resolved iOS-unavailable pthread JIT toggle APIs dynamically in blink and JIT probe; kept MAP_JIT and JIT compiler enabled.' \
             'Built flock for macOS with host SDK before iOS cross configure.' \
             'Added missing sys/time.h include for gettimeofday under current Clang C11 checks.' \
-            'Guarded AppKit import and desktop-only PNG debug dump with TARGET_OS_OSX; preserved Metal and movie rendering.' \
+            'Guarded AppKit, desktop PNG diagnostics and the macOS-only D24S8 pixel format with TARGET_OS_OSX; preserved iOS Metal and movie rendering.' \
             'Original entitlement file preserved byte-for-byte.' > dist/BUILD-NOTES.txt
           cat build-logs/toolchain.txt >> dist/BUILD-NOTES.txt
       - uses: actions/upload-artifact@v4
@@ -178,3 +179,4 @@ jobs:
           name: WineGlass-build-logs
           path: build-logs/
           if-no-files-found: warn
+
